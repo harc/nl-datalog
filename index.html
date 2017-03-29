@@ -1,0 +1,486 @@
+<html>
+  <head>
+    <title>datalog demo</title>
+    <meta charset="UTF-8">
+
+    <!-- Imports for OMeta -->
+    <script src="lib/ometa-js/lib.js"></script>
+    <script src="lib/ometa-js/ometa-base.js"></script>
+    <script src="lib/ometa-js/bs-js-compiler.js"></script>
+    <script src="lib/ometa-js/bs-ometa-compiler.js"></script>
+    <script src="lib/ometa-js/bs-ometa-optimizer.js"></script>
+    <script src="lib/ometa-js/bs-ometa-js-compiler.js"></script>
+
+    <!-- Other imports that are not specific to this project -->
+    <script src="lib/meh.js"></script>
+    <script src="lib/objectUtils.js"></script>
+    <script src="lib/browser.js"></script>
+    <script src="lib/customElement.js"></script>
+    <script src="lib/editor.js"></script>
+    <script src="lib/equals.js"></script>
+
+    <!-- Imports for the datalog implementation -->
+    <script src="datalog.js"></script>
+    <script src="datalogRenderer.js"></script>
+
+    <link href="http://fonts.googleapis.com/css?family=Nothing+You+Could+Do" rel="stylesheet" type="text/css">
+    <link href=datalog.css rel=stylesheet></style>
+
+    <style>
+
+body {
+  font-family: Optima;
+  font-size: 14pt;
+}
+
+editor {
+  display: block;
+  outline: none;
+  padding: 5px;
+  margin-bottom: 5pt;
+  position: relative;
+}
+
+editor:after {
+  position: absolute;
+  content: 'input';
+  right: 0;
+  bottom: 0;
+}
+
+output:before {
+  position: absolute;
+  font-size: 14pt;
+  content: 'output';
+  right: 0;
+  top: 0;
+}
+
+output {
+  position: relative;
+  display: block;
+  border-top: 2px dashed gray;
+  padding-top: 5pt;
+  display: block;
+  font-size: 14pt;
+}
+
+autoComplete {
+  background: rgba(200, 200, 200, 1);
+  box-shadow: 1px 1px 1px 0px #555;
+  border-radius: 2px;
+  position: absolute;
+  z-index: 2000;
+  overflow: hidden;
+}
+
+autoComplete > div.selected {
+  background: rgba(0, 0, 100, 0.25);
+}
+
+autoComplete > div {
+  padding: 3pt;
+}
+
+autoComplete > div > * {
+  top: 0;
+}
+
+line {
+  display: block;
+}
+
+line:not(:last-child) {
+  _margin-bottom: 8pt;
+}
+
+line.bad:after {
+  content: url(alert.png);
+  float: right;
+}
+
+    </style>
+  </head>
+  <body>
+    <script>
+
+    </script>
+    <script id="parser" type="application/ometa-js">
+
+meh.withModulesDo(function(datalog) {
+  ometa T {
+    lines     = line:x ('\n' line)*:xs end                   -> [x].concat(xs)
+              | line:x                 end                   -> [x],
+    line      = token*,
+    token     = @<iToken:t>:r                                -> {t.range = r; t},
+    iToken    = keyword | value | var | name | aggregate
+              | beginList | endList | not | spaces | other,
+    keyword   = word:w ?(self.isKeyword[w])                  -> ['keyword', w],
+    name      = <iName>:n                                    -> ['name', n],
+    var       = <upper | '_'>:n                              -> ['var', n],
+    value     = <upper (letter | digit | '_')+ | digit+>:v   -> ['value', v],
+    aggregate = '.' namePart:n                               -> ['aggregate', n],
+    beginList = '['                                          -> ['beginList'],
+    endList   = ']'                                          -> ['endList'],
+    not       = '~'                                          -> ['not'],
+    spaces    = <(~'\n' space)+>:s                           -> ['spaces', s],
+    other     = ~'\n' char:c                                 -> ['other', c],
+    word      = <(lower | '\'') (lower | digit | '\'')*>,
+    iName     = iName spaces namePart | namePart,
+    namePart  = word:w ?(!self.isKeyword[w])                 -> w
+  }
+  T.isKeyword = {'if': true, 'and': true}
+
+  ometa P {
+    variable    = spaces ['var' '_']                         -> datalog.makeWildcard()
+                | spaces ['var' :n]                          -> datalog.makeVariable(n),
+    value       = spaces ['value' [<digit+>]:n]              -> datalog.makeValue(parseInt(n))
+                | spaces ['value' :v]                        -> datalog.makeValue(v)
+                | spaces ['beginList'] value*:vs ['endList'] -> datalog.makeValue(vs.map(function(v) { return v.value })),
+    aggregate   = spaces ['aggregate' :a]                    -> a,
+    and         = spaces ['keyword' 'and'],
+    not         = spaces ['keyword' 'not'],
+    if          = spaces ['keyword' 'if'],
+    spaces      = ['spaces' anything]*,
+
+    clause :e   = (cNamePart | cArgPart(e))+:xs              -> makeClause(xs),
+    cNamePart   = spaces ['name' :n]                         -> {type: 'name', value: n},
+    cArgPart :e = apply(e):x                                 -> {type: 'arg', value: x},
+
+    headClause = clause(`headExpr),
+    headExpr   = bodyExpr:x aggregate:a                      -> datalog.Aggregate.get(a, x)
+               | bodyExpr,
+
+    bodyTerm   = not bodyClause:c                            -> datalog.makeNot(c)
+               | bodyClause,
+    bodyClause = clause(`bodyExpr),
+    bodyExpr   = variable | value,
+
+    body       = bodyTerm:x (and bodyTerm)*:xs               -> [x].concat(xs)
+               |                                             -> [],
+    rule       = headClause:h if body:b spaces end           -> datalog.makeRule(h, b)
+               | headClause:h           spaces end           -> datalog.makeRule(h, [])
+  }
+
+  function makeClause(parts) {
+    var nameParts = []
+    var args = []
+    var lastPartType
+    parts.forEach(function(part) {
+      if (part.type == 'name')
+        nameParts.push((lastPartType == 'name' ? ' ' : '') + part.value)
+      else {
+        nameParts.push('@')
+        args.push(part.value)
+      }
+      lastPartType = part.type
+    })
+    return datalog.makeClause(nameParts.join(''), args)
+  }
+})
+
+    </script>
+    <script>
+
+// Compile the grammar(s) above
+(function() {
+  var parserSource = document.getElementById('parser').innerHTML
+  var tree = BSOMetaJSParser.matchAll(parserSource, 'topLevel')
+  var compiled = BSOMetaJSTranslator.match(tree, 'trans')
+  eval(compiled)
+})()
+
+meh.withModulesDo(function(customElement, editor, datalog, datalogRenderer, objectUtils, browser) {
+  var editor = document.body.appendChild(editor.create())
+  var facts = document.body.appendChild(document.createElement('output'))
+
+  customElement.newType('autoComplete').withPrototype({
+    addSuggestion: function(node) {
+      var autoComplete = this
+
+      var div = document.createElement('div')
+      div.appendChild(node)
+      div.index = this.childNodes.length
+      this.appendChild(div)
+      if (div.index == 0)
+        autoComplete.setSelectedIndex(0)
+
+      div.onmouseover = function() {
+        autoComplete.setSelectedIndex(this.index)
+      }
+      div.onclick = function() {
+        autoComplete.useSelectedSuggestion()
+      }
+    },
+
+    getNumSuggestions: function() {
+      return this.childNodes.length
+    },
+
+    getSelectedIndex: function() {
+      for (var idx = 0; idx < this.childNodes.length; idx++)
+        if (this.childNodes.item(idx).className == 'selected')
+          return idx
+      return -1
+    },
+
+    setSelectedIndex: function(selIdx) {
+      selIdx = Math.min(Math.max(-1, selIdx), this.childNodes.length - 1)
+      for (var idx = 0; idx < this.childNodes.length; idx++)
+        this.childNodes.item(idx).className = idx == selIdx ? 'selected' : ''
+    },
+
+    getSelectedSuggestion: function() {
+      var div = this.childNodes.item(this.getSelectedIndex())
+      return div ? div.firstChild : null
+    },
+
+    useSelectedSuggestion: function() {
+      var replacement = this.getSelectedSuggestion()
+      this.forNode.parentElement.insertBefore(replacement, this.forNode)
+      this.forNode.parentElement.removeChild(this.forNode)
+
+      var range = document.createRange()
+      range.setStartAfter(replacement)
+      range.collapse(true)
+      var selection = document.getSelection()
+      selection.removeAllRanges()
+      selection.addRange(range)
+
+      editor.oninput({}, true)
+    },
+
+    clear: function() {
+      while (this.firstChild)
+        this.removeChild(this.firstChild)
+    }
+  })
+
+  editor.autoComplete = customElement.create('autoComplete')
+  document.body.appendChild(editor.autoComplete)
+
+  function extractAutoCompleteInfo(db, type) {
+    var names = {}
+    if (type == 'aggregate') {
+      Object.keys(datalog.Aggregate.dict).forEach(function(aggregate) {
+        names[aggregate] = 'aggregate'
+      })
+    } else {
+      Object.keys(T.isKeyword).forEach(function(keyword) {
+        names[keyword] = keyword
+      })
+      db.rules.forEach(function(rule) {
+        fillInAutoCompleteInfo(rule, type, names)
+      })
+    }
+    var info = []
+    objectUtils.keysAndValuesDo(names, function(text, type) {
+      info.push({type: type, text: text})
+    })
+    return info.sort(function(a, b) {
+      return a.text < b.text ? -1 : 1
+    })
+  }
+
+  // TODO: think of ways to do this in a way that doesn't
+  // require manual dispatch but doesn't do monkey-patching.
+  function fillInAutoCompleteInfo(term, type, names) {
+    if (term instanceof datalog.Rule) {
+      fillInAutoCompleteInfo(term.head, type, names)
+      term.conditions.forEach(function(condition) {
+        fillInAutoCompleteInfo(condition, type, names)
+      })
+    } else if (term instanceof datalog.Clause) {
+      if (type == 'clauseName')
+        term.name.split('@').forEach(function(name) {
+          if (name.length > 0)
+            names[name] = 'clauseName'
+        })
+      term.args.forEach(function(arg) {
+        fillInAutoCompleteInfo(arg, type, names)
+      })
+    } else if (term instanceof datalog.Not) {
+      fillInAutoCompleteInfo(term.clause, type, names)
+    } else if (term instanceof datalog.Value) {
+      if (type == 'value' || type == 'var')
+        names[term.value] = 'value'
+    } else if (term instanceof datalog.Aggregate) {
+      fillInAutoCompleteInfo(term.term, type, names)
+    }
+  }
+    
+  function getAutoCompleteType(node) {
+    switch (node.tagName) {
+      case 'VAR':        return 'var'
+      case 'VALUE':      return 'value'
+      case 'CLAUSENAME': return 'clauseName'
+      case 'AGGREGATE':  return 'aggregate'
+      default:           return undefined
+    }
+  }
+
+  editor.showAutoComplete = function(node) {
+    var autoComplete = this.autoComplete
+    autoComplete.forNode = node
+    autoComplete.clear()
+    var type = getAutoCompleteType(node)
+    if (type) {
+      var allChoices = extractAutoCompleteInfo(this.db, type)
+      var text = (node.tagName == 'AGGREGATE' ? node.childNodes.item(1) : node.firstChild).data
+      var tier1Choices = []
+      var tier2Choices = []
+      allChoices.forEach(function(choice) {
+        choice.text = choice.text.replace(/ /g, '\xA0')
+        var idx = choice.text.indexOf(text)
+        if (idx < 0)
+          return
+        if (idx == 0)
+          tier1Choices.push(choice)
+        else if (text.length >= 3)
+          tier2Choices.push(choice)
+      })
+      var choices = tier1Choices.concat(tier2Choices)
+      if (choices.length == 1 && choices[0].text == text)
+        return
+      choices.forEach(function(choice) {
+        var suggestion = customElement.create(choice.type, choice.text)
+        autoComplete.addSuggestion(suggestion)
+      })
+    }
+
+    var box = node.getBoundingClientRect()
+    this.autoComplete.style.top = box.bottom + 5
+    this.autoComplete.style.left = box.left
+  }
+
+  var superClear = editor.clear
+  editor.clear = function() {
+    this.autoComplete.clear()
+    superClear.call(this)
+  }
+
+  customElement.newType('line').withPrototype({
+    addToEnd: function(node) {
+      if (this.childNodes.length == 1 && this.firstChild.tagName == 'BR')
+        this.removeChild(this.firstChild)
+      return this.appendChild(node)
+    }
+  }).withInitializer(function() {
+    this.appendChild(document.createElement('br'))
+  })
+
+  editor.onmousedown = function() {
+    this.autoComplete.clear()
+  }
+
+  var superKeyDown = editor.onkeydown
+  editor.onkeydown = function(e) {
+    var ESC_KEY = 27, ENTER_KEY = 13, RIGHT_KEY = 39, UP_KEY = 38, DOWN_KEY = 40
+    if (this.autoComplete.getNumSuggestions() > 0)
+      switch (e.which) {
+        case RIGHT_KEY:
+        case ENTER_KEY:
+          if (this.autoComplete.getSelectedSuggestion()) {
+            this.autoComplete.useSelectedSuggestion()
+            return false
+          }
+          break
+        case ESC_KEY:
+          this.autoComplete.setSelectedIndex(-1)
+          return false
+        case UP_KEY:
+          this.autoComplete.setSelectedIndex(this.autoComplete.getSelectedIndex() - 1)
+          return false
+        case DOWN_KEY:
+          this.autoComplete.setSelectedIndex(this.autoComplete.getSelectedIndex() + 1)
+          return false
+        default:
+          this.autoComplete.clear()
+      }
+    return superKeyDown.call(this, e)
+  }
+
+  editor.oninput = function(e, suppressSuggestions) {
+    var text = this.getText()
+    var pos = this.getCursorPos()
+    // console.log('[[' + text.substr(0, pos) + '|' + text.substr(pos) + ']]')
+    // console.log('before', browser.prettyPrintNode(editor, document.getSelection().getRangeAt(0).endContainer, document.getSelection().getRangeAt(0).endOffset))
+    this.clear()
+
+    var rules = []
+    var lines = T.matchAll(text, 'lines')
+    lines.forEach(function(tokens) {
+      var line = editor.appendChild(customElement.create('line'))
+      tokens.forEach(function(token) {
+        switch(token[0]) {
+          case 'keyword':
+            line.addToEnd(customElement.create(token[1]))
+            break
+          case 'name':
+            line.addToEnd(customElement.create('clauseName', token[1]))
+            break
+          case 'var':
+            line.addToEnd(customElement.create('var', token[1]))
+            break
+          case 'value':
+            line.addToEnd(customElement.create('value', token[1]))
+            break
+          case 'aggregate':
+            line.addToEnd(customElement.create('aggregate', token[1]))
+            break
+          case 'beginList':
+            line.addToEnd(customElement.create('beginList'))
+            break
+          case 'endList':
+            line.addToEnd(customElement.create('endList'))
+            break
+          case 'not':
+            line.addToEnd(customElement.create('not'))
+            break
+          case 'spaces':
+            line.addToEnd(customElement.create('spaces', token[1]))
+            break
+          default:
+            line.addToEnd(customElement.create('other', token[1]))
+        }
+        if (token.range.fromIdx < pos && pos <= token.range.toIdx) {
+          var node = line.lastChild
+          if (node && !suppressSuggestions)
+            editor.showAutoComplete(node)
+        }
+      })
+      try {
+        var rule = P.matchAll(tokens, 'rule')
+        rules.push(rule)
+      } catch (e) {
+        if (!tokens.every(function(token) { return token[0] == 'spaces' }))
+          line.className = 'bad';
+      }
+    })
+
+    this.db = new datalog.Database(rules)
+    try {
+      var rendered = datalogRenderer.render(this.db.eval())
+      while (facts.firstChild)
+        facts.removeChild(facts.firstChild)
+      facts.appendChild(rendered)
+    } catch (e) {
+      console.log(e)
+    }
+
+    this.setCursorPos(pos)
+    // console.log('after', browser.prettyPrintNode(editor, document.getSelection().getRangeAt(0).endContainer, document.getSelection().getRangeAt(0).endOffset))
+  }
+
+  editor.db = new datalog.Database()
+  editor.setText(
+    "Homer is Bart's father\n" +
+    "Abe is Homer's father\n" +
+    "X is Y's parent if X is Y's father\n" +
+    "X is Y's grandfather if X is Z's father and Z is Y's parent")
+  editor.oninput()
+})
+
+    </script>
+  </body>
+</html>

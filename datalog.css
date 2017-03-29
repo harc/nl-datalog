@@ -1,0 +1,39 @@
+clauseName, var, value, aggregate, if, and, beginList, comma, endList, not {
+  display: inline-block;
+  color: black;
+  padding: 4px 0;
+}
+
+var {
+  background-color: #FCF0AD;
+  border: 1px dashed black;
+  padding: 0 6px;
+  font-style: normal;
+}
+
+value {
+  font-weight: bold;
+}
+
+aggregate {
+  font-size: 65%;
+  position: relative;
+  top: 6pt;
+  color: slateblue;
+  margin-left: 1px;
+  font-weight: bold;
+}
+
+aggregate > dot {
+  font-size: 0;
+}
+
+if, and {
+  font-weight: bold;
+  color: maroon;
+}
+
+and, beginList, endList, not {
+  background-color: #FCFCFC
+}
+
