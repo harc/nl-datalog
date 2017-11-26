@@ -475,9 +475,11 @@ meh.withModulesDo(function(customElement, editor, datalog, datalogRenderer, obje
   editor.db = new datalog.Database()
   editor.setText(
     "Homer is Bart's father\n" +
+    "Homer is Lisa's father\n" +
     "Abe is Homer's father\n" +
     "X is Y's parent if X is Y's father\n" +
-    "X is Y's grandfather if X is Z's father and Z is Y's parent")
+    "X is Y's grandfather if X is Z's father and Z is Y's parent\n" +
+    "X has Y.count grandchildren if X is Y's grandfather")
   editor.oninput()
 })
 
